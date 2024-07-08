@@ -26,6 +26,7 @@ package com.oracle.svm.core.graal.meta;
 
 import com.oracle.svm.core.ReservedRegisters;
 
+import com.oracle.svm.core.Uninterruptible;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterConfig;
 
@@ -41,4 +42,34 @@ public interface SubstrateRegisterConfig extends RegisterConfig {
         return ReservedRegisters.singleton().getFrameRegister();
     }
 
+    /*
+     * First stack slot is always reserved for injecting a DeoptimizationFrame in the SVM calling
+     * convention, aka. "deopt slot". Other users are PLT stubs (AArch64 only) and the
+     * leaveInterpreterStub which can use this slot at the same time. Fortunately both fit into the
+     * same slot, as the variable frame size of the leaveInterpreterStub fits into one byte, and the
+     * gotIndex scales with the amount of methods in an image.
+     */
+
+    long MAX_SIZE_VARIABLE_FRAMESIZE = 0xff;
+    int POS_VARIABLE_FRAMESIZE = 56;
+    int STACK_ALIGNMENT = 4; /* 0x10 stack alignment on AArch64 and AMD64 */
+    long MASK_VARIABLE_FRAMESIZE = (MAX_SIZE_VARIABLE_FRAMESIZE << POS_VARIABLE_FRAMESIZE);
+    long MASK_GOT_INDEX = ~(MAX_SIZE_VARIABLE_FRAMESIZE << POS_VARIABLE_FRAMESIZE);
+
+    @Uninterruptible(reason = Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    static long encodeVariableFrameSizeIntoDeoptSlot(long varSize) {
+        assert ((varSize >> STACK_ALIGNMENT) & ~MAX_SIZE_VARIABLE_FRAMESIZE) == 0;
+        return (varSize >> STACK_ALIGNMENT) << POS_VARIABLE_FRAMESIZE;
+    }
+
+    @Uninterruptible(reason = Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    static long decodeVariableFrameSizeFromDeoptSlot(long deoptSlot) {
+        long stackSize = (deoptSlot >> POS_VARIABLE_FRAMESIZE) & MAX_SIZE_VARIABLE_FRAMESIZE;
+        return stackSize << STACK_ALIGNMENT;
+    }
+
+    @Uninterruptible(reason = Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    static long decodeGOTIndex(long deoptSlot) {
+        return deoptSlot & MASK_GOT_INDEX;
+    }
 }
